@@ -61,12 +61,17 @@ def display_dialogue(screen: Screen, dialogue, char_time: float = 0.03, text_hei
     box_width, box_height = box_dimensions
     box_x, box_y = screen.width // 2 - box_width // 2, int(screen.height * text_height)
 
-    screen.move(box_x, box_y)
+    screen.move(box_x + box_width, box_y + box_height)
+    screen.draw(box_x + box_width, box_y, char='|')
 
-    screen.draw(box_x + box_width, box_y)
-    screen.draw(box_x + box_width, box_y + box_height)
-    screen.draw(box_x, box_y + box_height)
-    screen.draw(box_x, box_y)
+    screen.move(box_x, box_y + box_height)
+    screen.draw(box_x, box_y, char='|')
+
+    screen.move(box_x, box_y)
+    screen.draw(box_x + box_width + 1, box_y, char='-')
+
+    screen.move(box_x, box_y + box_height)
+    screen.draw(box_x + box_width + 1, box_y + box_height, char='-')
 
     line_length = (box_width - (1 + text_margin) * 2)
     cont_msg = '<Press any key to continue>'
@@ -88,15 +93,12 @@ def display_dialogue(screen: Screen, dialogue, char_time: float = 0.03, text_hei
     async def await_cont_inp():
         nonlocal awaiting_press
         while awaiting_press:
-            # this is the worst fucking thing i've ever wrote. TODO: figure out how the fuck asyncio works, cuz the docs sure don't help!
-            # i thought gather launched things asynchronously, but nope, i have to do this terribleness to get it to work
             screen.wait_for_input(cont_msg_blink_time) # wait for the blink amount of time
             await asyncio.sleep(0) # senc control back over to the blink func
             event = screen.get_event()
             if event and isinstance(event, KeyboardEvent):
                 awaiting_press = False
                 break
-            # the worst part of this is that it works
 
     async def do_cont():
         nonlocal awaiting_press
@@ -105,35 +107,68 @@ def display_dialogue(screen: Screen, dialogue, char_time: float = 0.03, text_hei
         
         screen.print_at(' ' * len(cont_msg), cont_msg_x, cont_msg_y)
 
+        # you know, apparently, i am a huge fucking dumbass. apparently, concurrent != parallel, and
+        # asyncio does concurrent
+
     for line in dialogue:
         # Clear box space for dialogue
         for y in range(box_y + 1, box_y + box_height):
             screen.move(box_x + 1, y)
             screen.draw(box_x + box_width - 1, y, char=' ')
 
-        for i, c in enumerate(line):
-            x = box_x + 1 + text_margin \
-                + i % line_length
-            y = box_y + 1 \
-                + floor(i / line_length)
+        words = line.split()
+        rows = []
+        cur_row = []
+        len_sum = 0
+        for word in words:
+            if len_sum + len(word) > line_length:
+                rows.append(' '.join(cur_row))
+                if len(word) > line_length:
+                    for i in range(0, len(word) - len(word) % line_length, line_length):
+                        rows.append(word[i:i + line_length + 1])
+                    cur_row.append(word[i + line_length + 1:])
+                    len_sum = len(word[i + line_length + 1:]) + 1
+                else:
+                    cur_row = [word]
+                    len_sum = len(word) + 1
+            else:
+                cur_row.append(word)
+                len_sum += len(word) + 1
 
-            screen.print_at(c, x, y) # draw current line char
-            screen.refresh()
+        if cur_row:
+            rows.append(' '.join(cur_row))
 
-            event = screen.get_event()
-            if event and isinstance(event, KeyboardEvent): # check if a key was pressed
-                # if it was, draw out the rest of the line and leave
-                for j in range(i + 1, len(line)):
-                    x = box_x + 1 + text_margin \
-                        + j % line_length
-                    y = box_y + 1 \
-                        + floor(j / line_length)
-                    screen.print_at(line[j], x, y)
+        key_pressed = False
 
+        for i, l in enumerate(rows):
+            for j, c in enumerate(l):
+                x = j + box_x + text_margin + 1
+                y = i + box_y + 1
+
+                screen.print_at(c, x, y) # draw current line char
                 screen.refresh()
-                break
 
-            sleep(char_time)
+                event = screen.get_event()
+                if event and isinstance(event, KeyboardEvent): # check if a key was pressed
+                    # if it was, leave, and mark it as so
+                    key_pressed = True
+                    break
+
+                sleep(char_time)
+            if key_pressed: # if a key was pressed
+                break # leave
+
+        # draw rest in case a key was pressed
+        if key_pressed:
+            for i, l in enumerate(rows):
+                for j, c in enumerate(l):
+                    x = j + box_x + text_margin + 1
+                    y = i + box_y + 1
+                    screen.print_at(c, x, y) # draw current line char
+                    screen.refresh()
+            # i know that it can be optimized, but cmon, the O notation wont change
         
         asyncio.run(do_cont())
         
+def update_gun_ui(shooter_face='😃', gun_sprite='︻デ═一', bullets_remaining=3):
+    pass
