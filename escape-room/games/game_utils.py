@@ -1,66 +1,57 @@
 from asciimatics.event import KeyboardEvent
-from asciimatics.scene import Scene
-import pygetwindow as gw
 from asciimatics.screen import Screen
 from math import floor
 from time import sleep
 import asyncio
 import curses
-from asciimatics.exceptions import ResizeScreenError
+import platform
+import ctypes
+import pygame as pg
 
-def generate_person(arms=True, legs=True, small=False, hands_raised=False) -> None:
-    if not small:
-        person = ''' O
-/|\\
-|
-/ \\
-'''
-        limb_filter = [
-            0, 0,
-            1, 0, 1,
-            0, 0,
-            2, 0, 2,
-        ]
-    else:
-        person = ''' O
-/|\\
-/ \\
-'''
-        limb_filter = [
-                0, 0,
-                1, 0, 1,
-                2, 0, 2
-            ]
-    person = list(person)
-    ret = 0
-    for i in range(len(person)): 
-        if person[i] == '\n': ret += 1; continue
-        if limb_filter[i - ret] == 1 and not arms:
-            person[i] = ' '
-        if limb_filter[i - ret] == 1 and hands_raised:
-            if person[i] == '/': person[i] = '\\'
-            elif person[i] == '\\': person[i] = '/'
+def get_active_window_rect():
+    if any(platform.win32_ver()):
+        import win32gui
+        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        if hwnd == 0:
+            return None
+        rect = win32gui.GetWindowRect(hwnd)
+        return (rect[0], rect[1], rect[2] - rect[0], rect[3] - rect[1])
+    elif any(platform.mac_ver()):
+        import Quartz
+        from AppKit import NSWorkspace
 
-        if limb_filter[i - ret] == 2 and not legs:
-            person[i] = ' '
+        active_app_name = NSWorkspace.sharedWorkspace().frontmostApplication().localizedName()
 
-    person = ''.join(person)
+        wl = Quartz.CGWindowListCopyWindowInfo( Quartz.kCGWindowListOptionAll, Quartz.kCGNullWindowID)
+        wl = sorted(wl, key=lambda k: k.valueForKey_('kCGWindowOwnerPID'))
 
-    return person
+        contains = lambda parent, child: bytes(child, 'utf-8') in bytes(parent, 'utf-8')
 
-def get_window_rect(window_title):
-    titles = gw.getAllTitles()
-    full_title = next((x for x in titles if bytes(window_title, "utf-8") in bytes(x, 'utf-8')), None)
-    
-    if full_title is None:
-        return None
+        for v in wl:
+            title, subtitle = str(v.valueForKey_('kCGWindowOwnerName')), str(v.valueForKey_('kCGWindowName'))
 
-    window_rects = []
-    for w in gw.getWindowsWithTitle(full_title):
-        window_rects.append((w.left, w.top, w.width, w.height))
-    return window_rects
+            if contains(title, active_app_name) or contains(subtitle, active_app_name):
+                return (
+                    int(v.valueForKey_('kCGWindowBounds').valueForKey_('X')), 
+                    int(v.valueForKey_('kCGWindowBounds').valueForKey_('Y')),
+                    int(v.valueForKey_('kCGWindowBounds').valueForKey_('Width')),
+                    int(v.valueForKey_('kCGWindowBounds').valueForKey_('Height'))
+                )
+
+        
+
+        pass
+
+    return None
+
+def get_monitor_size():
+    pg.init()
+    infos = pg.display.Info()
+    return (infos.current_w, infos.current_h)
 
 def display_dialogue(screen: Screen, dialogue, char_time: float = 0.03, text_height: float = 0.6, box_dimensions=(50, 5), text_margin: int = 1):
+    screen.clear_buffer(0, 0, 0)
+    
     box_width, box_height = box_dimensions
     box_x, box_y = screen.width // 2 - box_width // 2, int(screen.height * text_height)
 
@@ -82,36 +73,7 @@ def display_dialogue(screen: Screen, dialogue, char_time: float = 0.03, text_hei
     cont_msg_y = box_y + box_height + 2
     cont_msg_blink_time = 0.8
 
-    awaiting_press = False
-
-    async def blink_cont_text():
-        while awaiting_press:
-            screen.print_at(cont_msg, cont_msg_x, cont_msg_y)
-            screen.refresh()
-            await asyncio.sleep(0) # turn on the message and send control back
-            screen.print_at(' ' * len(cont_msg), cont_msg_x, cont_msg_y)
-            screen.refresh()
-            await asyncio.sleep(0) # turn off the message and send control back
-        
-    async def await_cont_inp():
-        nonlocal awaiting_press
-        while awaiting_press:
-            screen.wait_for_input(cont_msg_blink_time) # wait for the blink amount of time
-            await asyncio.sleep(0) # senc control back over to the blink func
-            event = screen.get_event()
-            if event and isinstance(event, KeyboardEvent):
-                awaiting_press = False
-                break
-
-    async def do_cont():
-        nonlocal awaiting_press
-        awaiting_press = True
-        await asyncio.gather(blink_cont_text(), await_cont_inp())
-        
-        screen.print_at(' ' * len(cont_msg), cont_msg_x, cont_msg_y)
-
-        # you know, apparently, i am a huge fucking dumbass. apparently, concurrent != parallel, and
-        # asyncio does concurrent
+    # awaiting_press = False
 
     for line in dialogue:
         # Clear box space for dialogue
@@ -171,7 +133,42 @@ def display_dialogue(screen: Screen, dialogue, char_time: float = 0.03, text_hei
                     screen.refresh()
             # i know that it can be optimized, but cmon, the O notation wont change
         
-        asyncio.run(do_cont())
+        await_continue(screen, cont_msg_x, cont_msg_y, cont_msg, cont_msg_blink_time)
+
+def await_continue(screen, cont_msg_x, cont_msg_y, cont_msg='<Press any key to continue>', cont_msg_blink_time=0.8):
+    async def _await_continue(screen, cont_msg_x, cont_msg_y, cont_msg, cont_msg_blink_time):
+        # nonlocal awaiting_press
+        awaiting_press = True
+
+        async def blink_cont_text():
+            while awaiting_press:
+                screen.print_at(cont_msg, cont_msg_x, cont_msg_y)
+                screen.refresh()
+                await asyncio.sleep(0) # turn on the message and send control back
+                screen.print_at(' ' * len(cont_msg), cont_msg_x, cont_msg_y)
+                screen.refresh()
+                await asyncio.sleep(0) # turn off the message and send control back
+            
+        async def await_cont_inp():
+            nonlocal awaiting_press
+            while awaiting_press:
+                screen.wait_for_input(cont_msg_blink_time) # wait for the blink amount of time
+                await asyncio.sleep(0) # send control back over to the blink func
+                event = screen.get_event()
+                if event and isinstance(event, KeyboardEvent):
+                    awaiting_press = False
+                    break
+
+        await asyncio.gather(blink_cont_text(), await_cont_inp())
+        
+        screen.print_at(' ' * len(cont_msg), cont_msg_x, cont_msg_y)
+        screen.refresh()
+
+        # you know, apparently, i am a huge fucking dumbass. apparently, concurrent != parallel, and
+        # asyncio does concurrent
+
+    asyncio.run(_await_continue(screen, cont_msg_x, cont_msg_y, cont_msg, cont_msg_blink_time))
+    
 
 def set_screen_size(screen, target_dimensions, leniency=10):
         tw, th = target_dimensions
@@ -202,9 +199,12 @@ def set_screen_size(screen, target_dimensions, leniency=10):
 
             pw = w if tw > w else tw
             ph = h if th > h else th
-            screen.print_at(wmsg, pw // 2 - len(wmsg) // 2, ph // 2)
+            screen.print_at(wmsg, pw // 2 - len(wmsg) // 2, ph // 2 - 1)
             screen.print_at(hmsg, pw // 2 - len(hmsg) // 2, ph // 2 + 1)
             screen.refresh()
+
+            if abs(screen.width - tw) <= leniency and abs(screen.height - th) <= leniency:
+                return
 
             while not screen.has_resized():
                 pass
@@ -223,15 +223,36 @@ def restart_mouse_tracking():
 def display_help(screen, help):
     helps = help.split('\n')
     mlen = len(max(helps, key=len))
-    screen.move(screen.width // 2 - mlen // 2 - 2, screen.height // 2 - len(helps) // 2 - 1)
-    screen.draw(screen.width // 2 + mlen // 2 + 2, screen.height // 2 - len(helps) // 2 - 1)
-    screen.draw(screen.width // 2 + mlen // 2 + 2, screen.height // 2 + len(helps) // 2 + 2)
-    screen.draw(screen.width // 2 - mlen // 2 - 2, screen.height // 2 + len(helps) // 2 + 2)
-    screen.draw(screen.width // 2 - mlen // 2 - 2, screen.height // 2 - len(helps) // 2 - 1)
+    screen.move(screen.width // 2 - mlen // 2 - 2, screen.height // 2 - len(helps) // 2 - 2)
+    screen.draw(screen.width // 2 + mlen // 2 + 2, screen.height // 2 - len(helps) // 2 - 2)
+    screen.draw(screen.width // 2 + mlen // 2 + 2, screen.height // 2 + len(helps) // 2 + 1)
+    screen.draw(screen.width // 2 - mlen // 2 - 2, screen.height // 2 + len(helps) // 2 + 1)
+    screen.draw(screen.width // 2 - mlen // 2 - 2, screen.height // 2 - len(helps) // 2 - 2)
     for i, h in enumerate(helps):
-        screen.print_at(h, screen.width // 2 - len(h) // 2, screen.height // 2 - len(helps) // 2 + i + 1)
+        screen.print_at(h, screen.width // 2 - len(h) // 2, screen.height // 2 - len(helps) // 2 + i)
     screen.refresh()
 
+def draw_reticle(screen, x, y, r=4):
+        screen.move(x - r * 2, y)
+        screen.draw(x, y + r)
+        screen.draw(x + r * 2, y)
+        screen.draw(x, y - r)
+        screen.draw(x - r * 2, y)
+        screen.move(x - r * 2 + 1, y)
+        screen.draw(x + r * 2, y, char='-')
+        screen.move(x, y - r + 1)
+        screen.draw(x, y + r, char='|')
+        screen.move(x, y)
+        screen.draw(x + 1, y, char='┼')
 
-def update_gun_ui(shooter_face='😃', gun_sprite='︻デ═一', bullets_remaining=3):
-    pass
+def await_key(screen, key):
+    key = key.lower()
+    while True:
+        screen.wait_for_input(1)
+        event = screen.get_event()
+        if event and isinstance(event, KeyboardEvent):
+            try:
+                key_char = chr(event.key_code).lower()
+            except ValueError:
+                continue
+            return key_char == key
