@@ -1,9 +1,12 @@
 from asciimatics.event import KeyboardEvent
+from asciimatics.scene import Scene
 import pygetwindow as gw
 from asciimatics.screen import Screen
 from math import floor
 from time import sleep
 import asyncio
+import curses
+from asciimatics.exceptions import ResizeScreenError
 
 def generate_person(arms=True, legs=True, small=False, hands_raised=False) -> None:
     if not small:
@@ -169,6 +172,66 @@ def display_dialogue(screen: Screen, dialogue, char_time: float = 0.03, text_hei
             # i know that it can be optimized, but cmon, the O notation wont change
         
         asyncio.run(do_cont())
+
+def set_screen_size(screen, target_dimensions, leniency=10):
+        tw, th = target_dimensions
+        w, h = screen.width, screen.height
+
+        def _set_screen_size(t_screen):
+            nonlocal w, h, screen
+            screen = t_screen
+            w, h = screen.width, screen.height
+            
+            screen.move(0, 0)
+            screen.draw(tw - 1, 0)
+            screen.draw(tw - 1, th - 1)
+            screen.draw(0, th - 1)
+            screen.draw(0, 0)
+
+            wmsg = '                                        '
+            if w < tw - leniency:
+                wmsg = 'Please increase this window\'s width'
+            if w > tw + leniency:
+                wmsg = 'Please decrease this window\'s width'
+
+            hmsg = '                                         '
+            if h < th - leniency:
+                hmsg = 'Please increase this window\'s height'
+            if h > th + leniency:
+                hmsg = 'Please decrease this window\'s height'
+
+            pw = w if tw > w else tw
+            ph = h if th > h else th
+            screen.print_at(wmsg, pw // 2 - len(wmsg) // 2, ph // 2)
+            screen.print_at(hmsg, pw // 2 - len(hmsg) // 2, ph // 2 + 1)
+            screen.refresh()
+
+            while not screen.has_resized():
+                pass
         
+        while abs(screen.width - tw) > leniency or abs(screen.height - th) > leniency:
+            Screen.wrapper(_set_screen_size)
+        
+        return screen
+
+def restart_mouse_tracking():
+    curses.initscr()
+    curses.mousemask(curses.ALL_MOUSE_EVENTS | curses.REPORT_MOUSE_POSITION)
+
+    print('\033[?1003h') # enable mouse tracking with the XTERM API
+
+def display_help(screen, help):
+    helps = help.split('\n')
+    mlen = len(max(helps, key=len))
+    screen.move(screen.width // 2 - mlen // 2 - 2, screen.height // 2 - len(helps) // 2 - 1)
+    screen.draw(screen.width // 2 + mlen // 2 + 2, screen.height // 2 - len(helps) // 2 - 1)
+    screen.draw(screen.width // 2 + mlen // 2 + 2, screen.height // 2 + len(helps) // 2 + 2)
+    screen.draw(screen.width // 2 - mlen // 2 - 2, screen.height // 2 + len(helps) // 2 + 2)
+    screen.draw(screen.width // 2 - mlen // 2 - 2, screen.height // 2 - len(helps) // 2 - 1)
+    for i, h in enumerate(helps):
+        screen.print_at(h, screen.width // 2 - len(h) // 2, screen.height // 2 - len(helps) // 2 + i + 1)
+    screen.refresh()
+
+
 def update_gun_ui(shooter_face='😃', gun_sprite='︻デ═一', bullets_remaining=3):
     pass
